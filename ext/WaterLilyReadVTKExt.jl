@@ -6,8 +6,8 @@ else
     using ..ReadVTK
 end
 
-using WaterLily
-import WaterLily: restart_sim!
+using WaterLilyDistributed
+import WaterLilyDistributed: restart_sim!
 
 """
     components_last(a::Array)
@@ -37,11 +37,11 @@ function restart_sim!(a::Simulation;fname::String="WaterLily.pvd",attrib=default
     copyto!(a.flow.u, squeeze(components_last(Array(get_data_reshaped(point_data["Velocity"])))));
     # reset time to work with the new time step
     a.flow.Δt[end] = PVDFile(fname).timesteps[end]*a.L/a.U
-    push!(a.flow.Δt,WaterLily.CFL(a.flow))
+    push!(a.flow.Δt,WaterLilyDistributed.CFL(a.flow))
     # return a writer if needed
     k = length(PVDFile(fname).timesteps)
     vtkWriter(split(fname,".pvd")[1],PVDFile(fname).directories[1],
-              WaterLily.pvd_collection(fname;append=true),attrib,k,extent)
+              WaterLilyDistributed.pvd_collection(fname;append=true),attrib,k,extent)
 end
 
 end # module

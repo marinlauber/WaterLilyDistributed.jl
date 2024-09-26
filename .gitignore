@@ -1,2 +1,7 @@
 examples/Manifest.toml
 Manifest.toml
+examples/vtk_data
+examples/vtk_data/*
+examples/*.pvd
+*.pvd
+vtk_data

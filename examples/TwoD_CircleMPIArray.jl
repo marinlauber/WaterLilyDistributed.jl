@@ -1,4 +1,4 @@
-using WaterLily
+using WaterLilyDistributed
 
 # circle simulation
 function circle(n,m;Re=250,U=1)

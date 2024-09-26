@@ -89,7 +89,7 @@ macro inside(ex)
     @assert ex.head == :(=) && ex.args[1].head == :(ref)
     a,I = ex.args[1].args[1:2]
     return quote # loop over the size of the reference
-        WaterLily.@loop $ex over $I ∈ inside($a)
+        WaterLilyDistributed.@loop $ex over $I ∈ inside($a)
     end |> esc
 end
 
@@ -162,9 +162,9 @@ Location in space of the cell at CartesianIndex `I` at face `i`.
 Using `i=0` returns the cell center s.t. `loc = I`.
 """
 grid_loc(arg) = 0 # no offset in serial
-global_loc() = grid_loc(Val(:WaterLily_MPIExt))
+global_loc() = grid_loc(Val(:WaterLilyDistributed_MPIExt))
 master(arg) = true # always on master in serial
-master() = master(Val(:WaterLily_MPIExt))
+master() = master(Val(:WaterLilyDistributed_MPIExt))
 @inline loc(i,I::CartesianIndex{N},T=Float32) where N = SVector{N,T}(global_loc() .+ I.I .- 2.5 .- 0.5 .* δ(i,I).I)
 @inline loc(Ii::CartesianIndex,T=Float32) = loc(last(Ii),Base.front(Ii),T)
 Base.last(I::CartesianIndex) = last(I.I)

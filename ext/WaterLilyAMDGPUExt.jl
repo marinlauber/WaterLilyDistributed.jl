@@ -6,8 +6,8 @@ else
     using ..AMDGPU
 end
 
-using WaterLily
-import WaterLily: L₂
+using WaterLilyDistributed
+import WaterLilyDistributed: L₂
 
 """
     __init__()

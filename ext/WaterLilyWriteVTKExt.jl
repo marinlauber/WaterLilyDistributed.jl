@@ -6,8 +6,8 @@ else
     using ..WriteVTK
 end
 
-using WaterLily
-import WaterLily: vtkWriter, write!, default_attrib, pvd_collection
+using WaterLilyDistributed
+import WaterLilyDistributed: vtkWriter, write!, default_attrib, pvd_collection
 using Printf: @sprintf
 import Base: close
 
@@ -33,7 +33,7 @@ struct VTKWriter
     extents       #:: Tuple{UnitRange}# cannot figure out what type to put here
 end
 function vtkWriter(fname="WaterLily";attrib=default_attrib(),dir="vtk_data",T=Float32,extents=[(1:1,1:1)])
-    (WaterLily.master() && !isdir(dir)) && mkdir(dir)
+    (WaterLilyDistributed.master() && !isdir(dir)) && mkdir(dir)
     VTKWriter(fname,dir,pvd_collection(fname),attrib,[0],extents)
 end
 function vtkWriter(fname,dir::String,collection,attrib::Dict{String,Function},k,extents)

@@ -83,7 +83,7 @@ BDIM-masked surface normal.
 """
 @inline function nds(body,x,t)
     d,n,_ = measure(body,x,t,fastd²=1)
-    n*WaterLily.kern(clamp(d,-1,1))
+    n*WaterLilyDistributed.kern(clamp(d,-1,1))
 end
 
 """

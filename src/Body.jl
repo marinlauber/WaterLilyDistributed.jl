@@ -36,9 +36,9 @@ function measure!(a::Flow{N,T},body::AbstractBody;t=zero(T),ϵ=1) where {N,T}
             for i ∈ 1:N
                 dᵢ,nᵢ,Vᵢ = measure(body,loc(i,I,T),t,fastd²=d²)
                 V[I,i] = Vᵢ[i]
-                μ₀[I,i] = WaterLily.μ₀(dᵢ,ϵ)
+                μ₀[I,i] = WaterLilyDistributed.μ₀(dᵢ,ϵ)
                 for j ∈ 1:N
-                    μ₁[I,i,j] = WaterLily.μ₁(dᵢ,ϵ)*nᵢ[j]
+                    μ₁[I,i,j] = WaterLilyDistributed.μ₁(dᵢ,ϵ)*nᵢ[j]
                 end
             end
         elseif d[I]<zero(T)

@@ -7,10 +7,10 @@ else
 end
 
 using StaticArrays
-using WaterLily
-import WaterLily: init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,get_extents
-import WaterLily: BC!,perBC!,exitBC!,L₂,L∞,_dot,CFL,residual!,sim_step!
-import WaterLily: applyV!,applyS!,measure!,@loop,measure_sdf!,grid_loc,master
+using WaterLilyDistributed
+import WaterLilyDistributed: init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,get_extents
+import WaterLilyDistributed: BC!,perBC!,exitBC!,L₂,L∞,_dot,CFL,residual!,sim_step!
+import WaterLilyDistributed: applyV!,applyS!,measure!,@loop,measure_sdf!,grid_loc,master
 
 const NDIMS_MPI = 3           # Internally, we set the number of dimensions always to 3 for calls to MPI. This ensures a fixed size for MPI coords, neigbors, etc and in general a simple, easy to read code.
 const NNEIGHBORS_PER_DIM = 2
@@ -44,7 +44,7 @@ function fill_send!(a::MPIArray,d,::Val{:Scalar}) # fill scalar field
     # @loop a.send[2][I] = a[buff(N,+d)[I]] over I ∈ CartesianIndices(a.send[2])
 end
 function fill_send!(a::MPIArray,d,::Val{:Vector})# fill vector field
-    N,n = WaterLily.size_u(a)
+    N,n = WaterLilyDistributed.size_u(a)
     for i ∈ 1:n # copy every component in that direction
         @loop a.send[1][send_flat(I,N,i-1,-d)] = a[I,i] over I ∈ buff(N,-d)
         @loop a.send[2][send_flat(I,N,i-1,+d)] = a[I,i] over I ∈ buff(N,+d)
@@ -60,7 +60,7 @@ function copyto!(a::MPIArray,d,::Val{:Scalar}) # copy scalar field back from rcv
     @loop a[I] = a.recv[i][recv_flat(I,N,0,d)] over I ∈ halos(N,d)
 end
 function copyto!(a::MPIArray,d,::Val{:Vector}) # copy scalar field back from rcv buffer
-    N,n = WaterLily.size_u(a); i = d<0 ? 1 : 2
+    N,n = WaterLilyDistributed.size_u(a); i = d<0 ? 1 : 2
     for j ∈ 1:n # copy every component in that direction
         @loop a[I,j] = a.recv[i][recv_flat(I,N,j-1,d)] over I ∈ halos(N,d)
     end
@@ -124,7 +124,7 @@ using EllipsisNotation
 This function sets the boundary conditions of the array `a` using the MPI grid.
 """
 function BC!(a::MPIArray,A,saveexit=false,perdir=())
-    N,n = WaterLily.size_u(a)
+    N,n = WaterLilyDistributed.size_u(a)
     for d ∈ 1:n # transfer full halos in each direction
         # get data to transfer @TODO use @views
         send1 = a[buff(N,-d),:]; send2 = a[buff(N,+d),:]
@@ -140,7 +140,7 @@ function BC!(a::MPIArray,A,saveexit=false,perdir=())
             if mpi_wall(d,1) # left wall
                 if i==d # set flux
                     a[halos(N,-d),i] .= A[i]
-                    a[WaterLily.slice(N,3,d),i] .= A[i]
+                    a[WaterLilyDistributed.slice(N,3,d),i] .= A[i]
                 else # zero gradient
                     a[halos(N,-d),i] .= reverse(send1[..,i]; dims=d)
                 end
@@ -157,8 +157,8 @@ function BC!(a::MPIArray,A,saveexit=false,perdir=())
 end
 
 function exitBC!(u::MPIArray{T},u⁰,U,Δt) where T
-    N,_ = WaterLily.size_u(u)
-    exitR = WaterLily.slice(N.-2,N[1]-1,1,3) # exit slice excluding ghosts
+    N,_ = WaterLilyDistributed.size_u(u)
+    exitR = WaterLilyDistributed.slice(N.-2,N[1]-1,1,3) # exit slice excluding ghosts
     ∮udA = zero(T)
     if mpi_wall(1,2) # right wall
         @loop u[I,1] = u⁰[I,1]-U[1]*Δt*(u⁰[I,1]-u⁰[I-δ(1,I),1]) over I ∈ exitR
@@ -215,8 +215,8 @@ finalize_mpi() = MPI.Finalize()
 
 # helper functions
 me() = mpi_grid().me
-master(::Val{:WaterLily_MPIExt}) = me()==0
-grid_loc(::Val{:WaterLily_MPIExt}) = mpi_grid().global_loc
+master(::Val{:WaterLilyDistributed_MPIExt}) = me()==0
+grid_loc(::Val{:WaterLilyDistributed_MPIExt}) = mpi_grid().global_loc
 neighbors(dim) = mpi_grid().neighbors[:,dim]
 mpi_wall(dim,i) = mpi_grid().neighbors[i,dim]==MPI.PROC_NULL
 mpi_dims() = MPI.Cart_get(mpi_grid().comm)[1]
@@ -232,13 +232,13 @@ function _dot(a::MPIArray{T},b::MPIArray{T}) where T
 end
 
 function CFL(a::Flow{D,T,S};Δt_max=10) where {D,T,S<:MPIArray{T}}
-    @inside a.σ[I] = WaterLily.flux_out(I,a.u)
+    @inside a.σ[I] = WaterLilyDistributed.flux_out(I,a.u)
     MPI.Allreduce(min(Δt_max,inv(maximum(a.σ)+5a.ν)),Base.min,mpi_grid().comm)
 end
 # this actually add a global comminutation every time residual is called
 function residual!(p::Poisson{T,S}) where {T,S<:MPIArray{T}}
-    WaterLily.perBC!(p.x,p.perdir)
-    @inside p.r[I] = ifelse(p.iD[I]==0,0,p.z[I]-WaterLily.mult(I,p.L,p.D,p.x))
+    WaterLilyDistributed.perBC!(p.x,p.perdir)
+    @inside p.r[I] = ifelse(p.iD[I]==0,0,p.z[I]-WaterLilyDistributed.mult(I,p.L,p.D,p.x))
     # s = sum(p.r)/length(inside(p.r))
     s = MPI.Allreduce(sum(p.r)/length(inside(p.r)),+,mpi_grid().comm)
     abs(s) <= 2eps(eltype(s)) && return
