@@ -1,3 +1,4 @@
+using WaterLily
 using WaterLilyDistributed
 
 # circle simulation

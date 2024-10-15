@@ -1,68 +1,27 @@
-"""
-$(README)
-"""
 module WaterLilyDistributed
 
-using DocStringExtensions
+using WaterLily
+import WaterLily: @loop,CI,slice,measure!,sim_time,time,sim_step!,mom_step!,update!,inside,inside_u
 
 include("util.jl")
-export L₂,BC!,@inside,inside,δ,apply!,loc,MPIArray
-
-using Reexport
-@reexport using KernelAbstractions: @kernel,@index,get_backend
 
 include("Poisson.jl")
-export AbstractPoisson,Poisson,solver!,mult!
 
 include("MultiLevelPoisson.jl")
-export MultiLevelPoisson,solver!,mult!
 
 include("Flow.jl")
-export Flow,mom_step!
 
-include("Body.jl")
-export AbstractBody,measure_sdf!
+include("WaterLilyMPI.jl")
+export MPIArray,init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,get_extents
 
-include("AutoBody.jl")
-export AutoBody,Bodies,measure,sdf,+,-
-
-include("Metrics.jl")
-
-"""
-    Simulation(dims::NTuple, u_BC::Union{NTuple,Function}, L::Number;
-               U=norm2(u_BC), Δt=0.25, ν=0., ϵ=1, perdir=()
-               uλ::nothing, g=nothing, exitBC=false,
-               body::AbstractBody=NoBody(),
-               T=Float32, mem=Array)
-
-Constructor for a WaterLily.jl simulation:
-
-  - `dims`: Simulation domain dimensions.
-  - `u_BC`: Simulation domain velocity boundary conditions, either a
-            tuple `u_BC[i]=uᵢ, i=eachindex(dims)`, or a time-varying function `f(i,t)`
-  - `L`: Simulation length scale.
-  - `U`: Simulation velocity scale.
-  - `Δt`: Initial time step.
-  - `ν`: Scaled viscosity (`Re=UL/ν`).
-  - `g`: Domain acceleration, `g(i,t)=duᵢ/dt`
-  - `ϵ`: BDIM kernel width.
-  - `perdir`: Domain periodic boundary condition in the `(i,)` direction.
-  - `exitBC`: Convective exit boundary condition in the `i=1` direction.
-  - `uλ`: Function to generate the initial velocity field.
-  - `body`: Immersed geometry.
-  - `T`: Array element type.
-  - `mem`: memory location. `Array`, `CuArray`, `ROCm` to run on CPU, NVIDIA, or AMD devices, respectively.
-
-See files in `examples` folder for examples.
-"""
-mutable struct Simulation{D,T,S}
+mutable struct DistributedSimulation{D,T,S}
     U :: Number # velocity scale
     L :: Number # length scale
     ϵ :: Number # kernel width
     flow :: Flow{D,T,S}
     body :: AbstractBody
     pois :: AbstractPoisson
-    function Simulation(dims::NTuple{N}, u_BC, L::Number;
+    function DistributedSimulation(dims::NTuple{N}, u_BC, L::Number;
                         Δt=0.25, ν=0., g=nothing, U=nothing, ϵ=1, perdir=(),
                         uλ=nothing, exitBC=false, body::AbstractBody=NoBody(),
                         T=Float32, mem=Array, psolver=MultiLevelPoisson) where N
@@ -71,13 +30,16 @@ mutable struct Simulation{D,T,S}
         isa(u_BC,Function) && @assert all(typeof.(ntuple(i->u_BC(i,zero(T)),N)).==T) "`u_BC` is not type stable"
         uλ = isnothing(uλ) ? ifelse(isa(u_BC,Function),(i,x)->u_BC(i,0.),(i,x)->u_BC[i]) : uλ
         U = isnothing(U) ? √sum(abs2,u_BC) : U # default if not specified
+        # make the halos 2 cells wide
+        dims = dims.+2
         flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mem,perdir,exitBC)
         measure!(flow,body;ϵ)
         new{N,T,typeof(flow.p)}(U,L,ϵ,flow,body,psolver(flow.p,flow.μ₀,flow.σ;perdir))
     end
 end
 
-time(sim::Simulation) = time(sim.flow)
+
+time(sim::DistributedSimulation) = time(sim.flow)
 """
     sim_time(sim::Simulation)
 
@@ -85,74 +47,36 @@ Return the current dimensionless time of the simulation `tU/L`
 where `t=sum(Δt)`, and `U`,`L` are the simulation velocity and length
 scales.
 """
-sim_time(sim::Simulation) = time(sim)*sim.U/sim.L
+sim_time(sim::DistributedSimulation) = time(sim)*sim.U/sim.L
 
-"""
-    sim_step!(sim::Simulation,t_end=sim(time)+Δt;max_steps=typemax(Int),remeasure=true,verbose=false)
-
-Integrate the simulation `sim` up to dimensionless time `t_end`.
-If `remeasure=true`, the body is remeasured at every time step.
-Can be set to `false` for static geometries to speed up simulation.
-"""
-function sim_step!(sim::Simulation,t_end;remeasure=true,max_steps=typemax(Int),verbose=false)
+# function sim_step!(sim::Simulation{D,T,S},t_end;remeasure=true,
+                #    max_steps=typemax(Int),verbose=false) where {D,T,S<:MPIArray{T}}
+function sim_step!(sim::DistributedSimulation,t_end;remeasure=true,
+                    max_steps=typemax(Int),verbose=false)
     steps₀ = length(sim.flow.Δt)
     while sim_time(sim) < t_end && length(sim.flow.Δt) - steps₀ < max_steps
         sim_step!(sim; remeasure)
-        verbose && println("tU/L=",round(sim_time(sim),digits=4),
-            ", Δt=",round(sim.flow.Δt[end],digits=3))
+        (verbose && me()==0) && println("tU/L=",round(sim_time(sim),digits=4),
+                                        ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
-function sim_step!(sim::Simulation;remeasure=true)
+function sim_step!(sim::DistributedSimulation;remeasure=true)
     remeasure && measure!(sim)
     mom_step!(sim.flow,sim.pois)
 end
 
-"""
-    measure!(sim::Simulation,t=timeNext(sim))
-
-Measure a dynamic `body` to update the `flow` and `pois` coefficients.
-"""
-function measure!(sim::Simulation,t=sum(sim.flow.Δt))
+function measure!(sim::DistributedSimulation,t=sum(sim.flow.Δt))
     measure!(sim.flow,sim.body;t,ϵ=sim.ϵ)
     update!(sim.pois)
 end
 
-export Simulation,sim_step!,sim_time,measure!
+export DistributedSimulation
 
 # default WriteVTK functions
-function vtkWriter end
-function write! end
-function default_attrib end
-function pvd_collection end
+function vtkWriter_d end
+function write_d! end
 # export
-export vtkWriter,write!,default_attrib
-
-# default ReadVTK functions
-function restart_sim! end
-# export
-export restart_sim!
-
-# # @TODO add default MPI function
-function init_mpi end
-function me end
-function global_loc end
-function mpi_grid end
-function mpi_dims end
-function finalize_mpi end
-function get_extents end
-# export
-export init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,get_extents
-# Check number of threads when loading WaterLily
-"""
-    check_nthreads(::Val{1})
-
-Check the number of threads available for the Julia session that loads WaterLily.
-A warning is shown when running in serial (JULIA_NUM_THREADS=1).
-"""
-check_nthreads(::Val{1}) = @warn("\nUsing WaterLily in serial (ie. JULIA_NUM_THREADS=1) is not recommended because \
-    it disables the GPU backend and defaults to serial CPU."*
-    "\nUse JULIA_NUM_THREADS=auto, or any number of threads greater than 1, to allow multi-threading in CPU or GPU backends.")
-check_nthreads(_) = nothing
+export vtkWriter_d,write_d!
 
 # Backward compatibility for extensions
 if !isdefined(Base, :get_extension)
@@ -160,13 +84,9 @@ if !isdefined(Base, :get_extension)
 end
 function __init__()
     @static if !isdefined(Base, :get_extension)
-        @require AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e" include("../ext/WaterLilyAMDGPUExt.jl")
-        @require CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba" include("../ext/WaterLilyCUDAExt.jl")
-        @require WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192" include("../ext/WaterLilyWriteVTKExt.jl")
-        @require ReadVTK = "dc215faf-f008-4882-a9f7-a79a826fadc3" include("../ext/WaterLilyReadVTKExt.jl")
-        @require MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195" include("../ext/WaterLilyMPIExt.jl")
+        @require WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192" include("../ext/WaterLilyDistributedWriteVTKExt.jl")
     end
-    check_nthreads(Val{Threads.nthreads()}())
+    WaterLily.check_nthreads(Val{Threads.nthreads()}())
 end
 
 end # module
