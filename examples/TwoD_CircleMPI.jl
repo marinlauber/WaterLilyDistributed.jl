@@ -43,12 +43,12 @@ L = 2^6
 
 # init the MPI grid and the simulation
 r = init_mpi((L,2L))
-sim = circle((L,2L),SA[L/2,L+2],L/8;mem=MPIArray) #use MPIArray to use extension
+sim = circle((L,2L),SA[L/2,L+2+5rand()],L/8;mem=MPIArray) #use MPIArray to use extension
 
 # need a distributed writer
 wr = vtkWriter_d("WaterLily-MPI-circle";attrib=custom_attrib,dir="vtk_data",
                 extents=get_extents(sim.flow.p))
-for _ in 1:50
+for _ in 1:10
     sim_step!(sim,sim_time(sim)+1.0,verbose=true)
     write_d!(wr,sim)
 end

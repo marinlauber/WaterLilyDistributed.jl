@@ -1,9 +1,43 @@
 module WaterLilyDistributed
 
 using WaterLily
-import WaterLily: @loop,CI,slice,measure!,sim_time,time,sim_step!,mom_step!,update!,inside,inside_u
+import WaterLily: @loop,CI,slice,measure!,sim_time,time,sim_step!,update!
+
+"""
+    MPIArray{T,N,V<:AbstractArray{T,N},W<:AbstractVector{T}}
+
+A distributed array that contains the array `A` and send and receive buffers `send` and `recv`.
+"""
+struct MPIArray{T,N,V<:AbstractArray{T,N},W<:AbstractVector{T}} <: AbstractArray{T,N}
+    A :: V
+    send :: Vector{W}
+    recv :: Vector{W}
+    function MPIArray(::Type{T}, dims::NTuple{N, Integer}) where {T,N}
+        A = Array{T,N}(undef, dims); M,n = last(dims)==N-1 ? (N-1,dims[1:end-1]) : (1,dims)
+        send = Array{T}(undef,M*2max(prod(n).÷n...))
+        recv = Array{T}(undef,M*2max(prod(n).÷n...))
+        new{T,N,typeof(A),typeof(send)}(A,[send,copy(send)],[recv,copy(recv)])
+    end
+    MPIArray(A::AbstractArray{T}) where T = (B=MPIArray(T,size(A)); B.A.=A; B)
+end
+export MPIArray
+for fname in (:size, :length, :ndims, :eltype) # how to write 4 lines of code in 5...
+    @eval begin
+        Base.$fname(A::MPIArray) = Base.$fname(A.A)
+    end
+end
+Base.getindex(A::MPIArray, i...)       = Base.getindex(A.A, i...)
+Base.setindex!(A::MPIArray, v, i...)   = Base.setindex!(A.A, v, i...)
+Base.copy(A::MPIArray)                 = MPIArray(A)
+Base.similar(A::MPIArray)              = MPIArray(eltype(A),size(A))
+Base.similar(A::MPIArray, dims::Tuple) = MPIArray(eltype(A),dims)
+# required for the @loop function
+using KernelAbstractions
+KernelAbstractions.get_backend(A::MPIArray) = KernelAbstractions.get_backend(A.A)
+export MPIArray
 
 include("util.jl")
+export get_extents
 
 include("Poisson.jl")
 
@@ -12,9 +46,14 @@ include("MultiLevelPoisson.jl")
 include("Flow.jl")
 
 include("WaterLilyMPI.jl")
-export MPIArray,init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,get_extents
+export init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi
 
-mutable struct DistributedSimulation{D,T,S}
+"""
+    DistributedSimulation{D,T,S}
+
+A distributed simulation object that contains the flow, body, and Poisson solver.
+"""
+mutable struct DistributedSimulation{D,T,S} #<: AbstractSimulation
     U :: Number # velocity scale
     L :: Number # length scale
     ϵ :: Number # kernel width
@@ -49,8 +88,6 @@ scales.
 """
 sim_time(sim::DistributedSimulation) = time(sim)*sim.U/sim.L
 
-# function sim_step!(sim::Simulation{D,T,S},t_end;remeasure=true,
-                #    max_steps=typemax(Int),verbose=false) where {D,T,S<:MPIArray{T}}
 function sim_step!(sim::DistributedSimulation,t_end;remeasure=true,
                     max_steps=typemax(Int),verbose=false)
     steps₀ = length(sim.flow.Δt)
