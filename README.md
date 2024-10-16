@@ -23,10 +23,11 @@ See the `examples` folder for more examples.
 
 ### @TODO's
 
-- [ ] clean up all the import from `WaterLily`
-- [ ] make `DistributedSimulation <: AbstractSimulation` (`WaterLily.jl/master` needs to change)
-- [ ] Update `WaterLilyWriteVTKExt.jl` to work with distributed simulations
-- [ ] make test work here
+- [x] clean up all the import from `WaterLily`
+- [ ] make `DistributedSimulation <: AbstractSimulation` (`WaterLily.jl/master` needs to change) this will avoid redefining the `sim_step!` and `sim_time` methods.
+- [ ] change `WaterLily.⋅` (dot) to enable type dispatch for MPIArrays (`WaterLily.jl/master` needs to change)
+- [ ] Update `WaterLilyWriteVTKExt.jl` to work with distributed simulations (`WaterLily.jl/master` needs to change)
+- [ ] make test specific to this package
 
 ### Ideas for future work
 
@@ -37,7 +38,7 @@ using WaterLily
 using WaterLilyDistributed
 using MPI
 
-@distributed begin
+@distributed (2,2,2) # mpi grid
     sim = Simulation(dims, ...)
 
     ... # your code here
