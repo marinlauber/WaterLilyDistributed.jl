@@ -1,7 +1,8 @@
 module WaterLilyDistributed
 
 using WaterLily
-import WaterLily: @loop,CI,slice,measure!,sim_time,time,sim_step!,update!
+using WaterLily: @loop,CI,slice
+import WaterLily: sim_step!,sim_time
 
 """
     MPIArray{T,N,V<:AbstractArray{T,N},W<:AbstractVector{T}}
@@ -46,50 +47,27 @@ include("MultiLevelPoisson.jl")
 include("Flow.jl")
 
 include("WaterLilyMPI.jl")
-export init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi
+export init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,master
 
-"""
-    DistributedSimulation{D,T,S}
-
-A distributed simulation object that contains the flow, body, and Poisson solver.
-"""
-mutable struct DistributedSimulation{D,T,S} #<: AbstractSimulation
-    U :: Number # velocity scale
-    L :: Number # length scale
-    ϵ :: Number # kernel width
-    flow :: Flow{D,T,S}
-    body :: AbstractBody
-    pois :: AbstractPoisson
-    function DistributedSimulation(dims::NTuple{N}, u_BC, L::Number;
-                        Δt=0.25, ν=0., g=nothing, U=nothing, ϵ=1, perdir=(),
-                        uλ=nothing, exitBC=false, body::AbstractBody=NoBody(),
-                        T=Float32, mem=Array, psolver=MultiLevelPoisson) where N
-        @assert !(isa(u_BC,Function) && isa(uλ,Function)) "`u_BC` and `uλ` cannot be both specified as Function"
-        @assert !(isnothing(U) && isa(u_BC,Function)) "`U` must be specified if `u_BC` is a Function"
-        isa(u_BC,Function) && @assert all(typeof.(ntuple(i->u_BC(i,zero(T)),N)).==T) "`u_BC` is not type stable"
-        uλ = isnothing(uλ) ? ifelse(isa(u_BC,Function),(i,x)->u_BC(i,0.),(i,x)->u_BC[i]) : uλ
-        U = isnothing(U) ? √sum(abs2,u_BC) : U # default if not specified
-        # make the halos 2 cells wide
-        dims = dims.+2
-        flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mem,perdir,exitBC)
-        measure!(flow,body;ϵ)
-        new{N,T,typeof(flow.p)}(U,L,ϵ,flow,body,psolver(flow.p,flow.μ₀,flow.σ;perdir))
-    end
+function WaterLily.Simulation(dims::NTuple{N}, u_BC, L::Number;
+                    Δt=0.25, ν=0., g=nothing, U=nothing, ϵ=1, perdir=(),
+                    uλ=nothing, exitBC=false, body::AbstractBody=NoBody(),
+                    T=Float32, mem=Array) where N
+    @assert !(isa(u_BC,Function) && isa(uλ,Function)) "`u_BC` and `uλ` cannot be both specified as Function"
+    @assert !(isnothing(U) && isa(u_BC,Function)) "`U` must be specified if `u_BC` is a Function"
+    isa(u_BC,Function) && @assert all(typeof.(ntuple(i->u_BC(i,zero(T)),N)).==T) "`u_BC` is not type stable"
+    uλ = isnothing(uλ) ? ifelse(isa(u_BC,Function),(i,x)->u_BC(i,0.),(i,x)->u_BC[i]) : uλ
+    U = isnothing(U) ? √sum(abs2,u_BC) : U # default if not specified
+    r = init_mpi(dims) # initialize the MPI grid
+    dims = dims.+2 # make the halos 2 cells wide
+    mpi_mem = MPIArray # at some point there should be a MPICuArray here
+    flow = Flow(dims,u_BC;uλ,Δt,ν,g,T,f=mpi_mem,perdir,exitBC)
+    measure!(flow,body;ϵ)
+    WaterLily.Simulation(U,L,ϵ,flow,body,MultiLevelPoisson(flow.p,flow.μ₀,flow.σ;perdir))
 end
 
-
-time(sim::DistributedSimulation) = time(sim.flow)
-"""
-    sim_time(sim::Simulation)
-
-Return the current dimensionless time of the simulation `tU/L`
-where `t=sum(Δt)`, and `U`,`L` are the simulation velocity and length
-scales.
-"""
-sim_time(sim::DistributedSimulation) = time(sim)*sim.U/sim.L
-
-function sim_step!(sim::DistributedSimulation,t_end;remeasure=true,
-                    max_steps=typemax(Int),verbose=false)
+function WaterLily.sim_step!(sim::Simulation{D,T,S},t_end;remeasure=true,
+                   max_steps=typemax(Int),verbose=false) where {D,T,S<:MPIArray{T}}
     steps₀ = length(sim.flow.Δt)
     while sim_time(sim) < t_end && length(sim.flow.Δt) - steps₀ < max_steps
         sim_step!(sim; remeasure)
@@ -97,33 +75,30 @@ function sim_step!(sim::DistributedSimulation,t_end;remeasure=true,
                                         ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
-function sim_step!(sim::DistributedSimulation;remeasure=true)
-    remeasure && measure!(sim)
-    mom_step!(sim.flow,sim.pois)
+
+using WriteVTK
+using Printf: @sprintf
+
+# import utils fuctions
+components_first = Base.get_extension(WaterLily, :WaterLilyWriteVTKExt).components_first
+VTKWriter = Base.get_extension(WaterLily, :WaterLilyWriteVTKExt).VTKWriter
+pvd_collection = Base.get_extension(WaterLily, :WaterLilyWriteVTKExt).pvd_collection
+
+function WaterLily.vtkWriter(fname="WaterLily";attrib=default_attrib(),dir="vtk_data",T=Float32)
+    (master() && !isdir(dir)) && mkdir(dir)
+    VTKWriter(fname,dir,pvd_collection(fname),attrib,[0])
 end
-
-function measure!(sim::DistributedSimulation,t=sum(sim.flow.Δt))
-    measure!(sim.flow,sim.body;t,ϵ=sim.ϵ)
-    update!(sim.pois)
-end
-
-export DistributedSimulation
-
-# default WriteVTK functions
-function vtkWriter_d end
-function write_d! end
-# export
-export vtkWriter_d,write_d!
-
-# Backward compatibility for extensions
-if !isdefined(Base, :get_extension)
-    using Requires
-end
-function __init__()
-    @static if !isdefined(Base, :get_extension)
-        @require WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192" include("../ext/WaterLilyDistributedWriteVTKExt.jl")
+function WaterLily.write!(w::VTKWriter,a::Simulation{D,T,S};N=size(inside(a.flow.p))) where {D,T,S<:MPIArray{T}}
+    k,part = w.count[1], Int(me()+1)
+    extents = get_extents(a.flow.p)
+    pvtk = pvtk_grid(w.dir_name*@sprintf("/%s_%06i", w.fname, k), extents[part];
+                     part=part, extents=extents, ghost_level=2)
+    for (name,func) in w.output_attrib
+        # this seems bad, but I @benchmark it and it's the same as just calling func()
+        pvtk[name] = size(func(a))==size(a.flow.p) ? func(a) : components_first(func(a))
     end
-    WaterLily.check_nthreads(Val{Threads.nthreads()}())
+    vtk_save(pvtk); w.count[1]=k+1
+    w.collection[round(sim_time(a),digits=4)]=pvtk
 end
 
 end # module

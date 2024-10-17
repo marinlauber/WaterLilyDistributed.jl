@@ -14,11 +14,11 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 WaterLily = "ed894a53-35f9-47f1-b17f-85db9237eebd"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
-[weakdeps]
-WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
+# [weakdeps]
+# WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
-[extensions]
-WaterLilyDistributedWriteVTKExt = "WriteVTK"
+# [extensions]
+# WaterLilyDistributedWriteVTKExt = "WriteVTK"
 
 [compat]
 EllipsisNotation = "1.8"
@@ -31,7 +31,7 @@ BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 PerformanceTestTools = "dc46b164-d16f-48ec-a853-60448fc869fe"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
+# WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
 [targets]
 test = ["Test", "BenchmarkTools"]

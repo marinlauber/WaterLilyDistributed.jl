@@ -1,6 +1,6 @@
 ## util.jl
 
-import WaterLily: splitn,size_u,slice
+import WaterLily: splitn,size_u,slice,inside_u,loc
 
 """
     halos(dims,d)
@@ -38,22 +38,6 @@ end
 @inline WaterLily.inside_u(dims::NTuple{N}) where N = CartesianIndices((map(i->(3:i-2),dims)...,1:N))
 @inline WaterLily.inside_u(u::MPIArray) = CartesianIndices(map(i->(3:i-2),Base.front(size(u))))
 
-"""
-    grid_loc(arg)
-
-Return the global location of the grid in the shared memory domain.
-"""
-grid_loc(arg) = 0 # no offset in serial
-global_loc() = grid_loc(Val(:WaterLilyDistributed_MPIExt))
-
-"""
-    master()
-
-Return `true` if the code is running on the master process.
-"""
-master(arg) = true # always on master in serial
-master() = master(Val(:WaterLilyDistributed_MPIExt))
-
 using StaticArrays
 """
 loc(i,I) = loc(Ii)
@@ -61,7 +45,7 @@ loc(i,I) = loc(Ii)
 Location in space of the cell at CartesianIndex `I` at face `i`.
 Using `i=0` returns the cell center s.t. `loc = I`.
 """
-@inline WaterLily.loc(i,I::CartesianIndex{N},T=Float32) where N = SVector{N,T}(global_loc() .+ I.I .- 2.5 .- 0.5 .* δ(i,I).I)
+@inline WaterLily.loc(i,I::CartesianIndex{N},T=Float32) where N = SVector{N,T}(grid_loc() .+ I.I .- 2.5 .- 0.5 .* δ(i,I).I)
 @inline WaterLily.loc(Ii::CartesianIndex,T=Float32) = WaterLily.loc(last(Ii),Base.front(Ii),T)
 Base.last(I::CartesianIndex) = last(I.I)
 Base.front(I::CartesianIndex) = CI(Base.front(I.I))

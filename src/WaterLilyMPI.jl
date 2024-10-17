@@ -116,8 +116,8 @@ finalize_mpi() = MPI.Finalize()
 
 # helper functions
 me() = mpi_grid().me
-master(::Val{:WaterLilyDistributed_MPIExt}) = me()==0
-grid_loc(::Val{:WaterLilyDistributed_MPIExt}) = mpi_grid().global_loc
+master() = me()==0
+grid_loc() = mpi_grid().global_loc
 neighbors(dim) = mpi_grid().neighbors[:,dim]
 mpi_wall(dim,i) = mpi_grid().neighbors[i,dim]==MPI.PROC_NULL
 mpi_dims() = MPI.Cart_get(mpi_grid().comm)[1]

@@ -59,7 +59,7 @@ function _dot(a::MPIArray{T},b::MPIArray{T}) where T
 end
 
 # need to redefine pcg because of the dot function above
-function WaterLily.pcg!(p::Poisson{T};it=6) where T
+function WaterLily.pcg!(p::Poisson{T,S};it=6) where {T,S<:MPIArray{T}}
     x,r,ϵ,z = p.x,p.r,p.ϵ,p.z
     @inside z[I] = ϵ[I] = r[I]*p.iD[I]
     rho = r⋅z
