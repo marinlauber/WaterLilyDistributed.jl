@@ -44,8 +44,7 @@ L = 2^6
 r = init_mpi((L,2L))
 sim = circle((L,2L),SA[L/2,L+2],L/8;mem=MPIArray) #use MPIArray to use extension
 
-wr = vtkWriter("WaterLily-MPI-circle";attrib=custom_attrib,dir="vtk_data",
-               extents=get_extents(sim.flow.p))
+wr = vtkWriter("WaterLily-MPI-circle";attrib=custom_attrib,dir="vtk_data")
 for _ in 1:50
     sim_step!(sim,sim_time(sim)+1.0,verbose=true)
     write!(wr,sim)

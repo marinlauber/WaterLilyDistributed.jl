@@ -1,31 +1,21 @@
 using KernelAbstractions: get_backend, @index, @kernel
 
-struct MPIArray{T,N,V<:AbstractArray{T,N},W<:AbstractVector{T}} <: AbstractArray{T,N}
-    A :: V
-    send :: Vector{W}
-    recv :: Vector{W}
-    function MPIArray(::Type{T}, dims::NTuple{N, Integer}) where {T,N}
-        A = Array{T,N}(undef, dims); M,n = last(dims)==N-1 ? (N-1,dims[1:end-1]) : (1,dims)
-        send = Array{T}(undef,M*2max(prod(n).÷n...))
-        recv = Array{T}(undef,M*2max(prod(n).÷n...))
-        new{T,N,typeof(A),typeof(send)}(A,[send,copy(send)],[recv,copy(recv)])
-    end
-    MPIArray(A::AbstractArray{T}) where T = (B=MPIArray(T,size(A)); B.A.=A; B)
+"""
+    halos(dims,d)
+
+Return the CartesianIndices of the halos in dimension `±d` of an array of size `dims`.
+"""
+function halos(dims::NTuple{N},j) where N
+    CartesianIndices(ntuple( i-> i==abs(j) ? j<0 ? (1:2) : (dims[i]-1:dims[i]) : (1:dims[i]), N))
 end
-export MPIArray
-for fname in (:size, :length, :ndims, :eltype) # how to write 4 lines of code in 5...
-    @eval begin
-        Base.$fname(A::MPIArray) = Base.$fname(A.A)
-    end
+"""
+    buff(dims,d)
+
+Return the CartesianIndices of the buffer in dimension `±d` of an array of size `dims`.
+"""
+function buff(dims::NTuple{N},j) where N
+    CartesianIndices(ntuple( i-> i==abs(j) ? j<0 ? (3:4) : (dims[i]-3:dims[i]-2) : (1:dims[i]), N))
 end
-Base.getindex(A::MPIArray, i...)       = Base.getindex(A.A, i...)
-Base.setindex!(A::MPIArray, v, i...)   = Base.setindex!(A.A, v, i...)
-Base.copy(A::MPIArray)                 = MPIArray(A)
-Base.similar(A::MPIArray)              = MPIArray(eltype(A),size(A))
-Base.similar(A::MPIArray, dims::Tuple) = MPIArray(eltype(A),dims)
-# required for the @loop function
-using KernelAbstractions
-KernelAbstractions.get_backend(A::MPIArray) = KernelAbstractions.get_backend(A.A)
 
 @inline CI(a...) = CartesianIndex(a...)
 """
@@ -70,6 +60,8 @@ size_u(u) = splitn(size(u))
 L₂ norm of array `a` excluding ghosts.
 """
 L₂(a) = sum(abs2,@inbounds(a[I]) for I ∈ inside(a))
+L₂(a::MPIArray{T}) where T = MPI.Allreduce(sum(T,abs2,@inbounds(a[I]) for I ∈ inside(a)),+,mpi_grid().comm)
+L∞(a::MPIArray) = MPI.Allreduce(maximum(abs.(a)),Base.max,mpi_grid().comm)
 
 """
     @inside <expr>
@@ -222,6 +214,38 @@ function BC!(a,A,saveexit=false,perdir=())
         end
     end
 end
+function BC!(a::MPIArray,A,saveexit=false,perdir=())
+    N,n = size_u(a)
+    for d ∈ 1:n # transfer full halos in each direction
+        # get data to transfer @TODO use @views
+        send1 = a[buff(N,-d),:]; send2 = a[buff(N,+d),:]
+        recv1 = zero(send1);     recv2 = zero(send2)
+        # swap 
+        mpi_swap!(send1,recv1,send2,recv2,neighbors(d),mpi_grid().comm)
+
+        # mpi boundary swap
+        !mpi_wall(d,1) && (a[halos(N,-d),:] .= recv1) # halo swap
+        !mpi_wall(d,2) && (a[halos(N,+d),:] .= recv2) # halo swap
+        
+        for i ∈ 1:n # this sets the BCs on the physical boundary
+            if mpi_wall(d,1) # left wall
+                if i==d # set flux
+                    a[halos(N,-d),i] .= A[i]
+                    a[WaterLilyDistributed.slice(N,3,d),i] .= A[i]
+                else # zero gradient
+                    a[halos(N,-d),i] .= reverse(send1[..,i]; dims=d)
+                end
+            end
+            if mpi_wall(d,2) # right wall
+                if i==d && (!saveexit || i>1) # convection exit
+                    a[halos(N,+d),i] .= A[i]
+                else # zero gradient
+                    a[halos(N,+d),i] .= reverse(send2[..,i]; dims=d)
+                end
+            end
+        end
+    end
+end
 """
     exitBC!(u,u⁰,U,Δt)
 
@@ -234,6 +258,20 @@ function exitBC!(u,u⁰,U,Δt)
     ∮u = sum(@view(u[exitR,1]))/length(exitR)-U[1]   # mass flux imbalance
     @loop u[I,1] -= ∮u over I ∈ exitR         # correct flux
 end
+function exitBC!(u::MPIArray{T},u⁰,U,Δt) where T
+    N,_ = size_u(u)
+    exitR = slice(N.-2,N[1]-1,1,3) # exit slice excluding ghosts
+    ∮udA = zero(T)
+    if mpi_wall(1,2) # right wall
+        @loop u[I,1] = u⁰[I,1]-U[1]*Δt*(u⁰[I,1]-u⁰[I-δ(1,I),1]) over I ∈ exitR
+        @loop u[I+δ(1,I),1] = u[I,1] over I ∈ exitR
+        ∮udA = sum(@view(u[exitR,1]))/length(exitR)-U[1]   # mass flux imbalance
+    end
+    ∮u = MPI.Allreduce(∮udA,+,mpi_grid().comm)           # domain imbalance
+    N = prod(mpi_dims()[2:end]) # for now we only have 1D exit
+    mpi_wall(1,2) && (@loop u[I,1] -= ∮u/N over I ∈ exitR;
+                      @loop u[I+δ(1,I),1] -= ∮u/N over I ∈ exitR) # correct flux only on right wall
+end
 """
     perBC!(a,perdir)
 Apply periodic conditions to the ghost cells of a _scalar_ field.
@@ -245,29 +283,49 @@ perBC!(a, perdir, N = size(a)) = for j ∈ perdir
     @loop a[I] = a[CIj(j,I,3)] over I ∈ slice(N,N[j]-1,j)
     @loop a[I] = a[CIj(j,I,4)] over I ∈ slice(N,N[j],j)
 end
-"""
-    interp(x::SVector, arr::AbstractArray)
+perBC!(a::MPIArray,::Tuple{})            = _perBC!(a, size(a), true)
+perBC!(a::MPIArray, perdir, N = size(a)) = _perBC!(a, N, true)
+_perBC!(a, N, mpi::Bool) = for d ∈ eachindex(N)
+    # fill with data to transfer
+    fill_send!(a,d,Val(:Scalar))
 
-    Linear interpolation from array `arr` at index-coordinate `x`.
-    Note: This routine works for any number of dimensions.
-"""
-function interp(x::SVector{D}, arr::AbstractArray{T,D}) where {D,T}
-    # Index below the interpolation coordinate and the difference
-    i = floor.(Int,x); y = x.-i
+    # swap
+    mpi_swap!(a,neighbors(d),mpi_grid().comm)
 
-    # CartesianIndices around x
-    I = CartesianIndex(i...); R = I:I+oneunit(I)
-
-    # Linearly weighted sum over arr[R] (in serial)
-    s = zero(T)
-    @fastmath @inbounds @simd for J in R
-        weight = prod(@. ifelse(J.I==I.I,1-y,y))
-        s += arr[J]*weight
-    end
-    return s
+    # this sets the BCs
+    !mpi_wall(d,1) && copyto!(a,-d,Val(:Scalar)) # halo swap
+    !mpi_wall(d,2) && copyto!(a,+d,Val(:Scalar)) # halo swap
 end
-function interp(x::SVector{D}, varr::AbstractArray) where {D}
-    # Shift to align with each staggered grid component and interpolate
-    @inline shift(i) = SVector{D}(ifelse(i==j,0.5,0.0) for j in 1:D)
-    return SVector{D}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
+
+# hepler function for vtk writer
+function get_extents(a::MPIArray)
+    xs = Tuple(ifelse(x==0,1,x+1):ifelse(x==0,n+4,n+x+4) for (n,x) in zip(size(inside(a)),mpi_grid().global_loc))
+    MPI.Allgather(xs, mpi_grid().comm)
 end
+
+# """
+#     interp(x::SVector, arr::AbstractArray)
+
+#     Linear interpolation from array `arr` at index-coordinate `x`.
+#     Note: This routine works for any number of dimensions.
+# """
+# function interp(x::SVector{D}, arr::AbstractArray{T,D}) where {D,T}
+#     # Index below the interpolation coordinate and the difference
+#     i = floor.(Int,x); y = x.-i
+
+#     # CartesianIndices around x
+#     I = CartesianIndex(i...); R = I:I+oneunit(I)
+
+#     # Linearly weighted sum over arr[R] (in serial)
+#     s = zero(T)
+#     @fastmath @inbounds @simd for J in R
+#         weight = prod(@. ifelse(J.I==I.I,1-y,y))
+#         s += arr[J]*weight
+#     end
+#     return s
+# end
+# function interp(x::SVector{D}, varr::AbstractArray) where {D}
+#     # Shift to align with each staggered grid component and interpolate
+#     @inline shift(i) = SVector{D}(ifelse(i==j,0.5,0.0) for j in 1:D)
+#     return SVector{D}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
+# end

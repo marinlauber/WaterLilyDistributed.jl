@@ -155,6 +155,10 @@ function CFL(a::Flow;Δt_max=10)
     @inside a.σ[I] = flux_out(I,a.u)
     min(Δt_max,inv(maximum(a.σ)+5a.ν))
 end
+function CFL(a::Flow{D,T,S};Δt_max=10) where {D,T,S<:MPIArray{T}}
+    @inside a.σ[I] = WaterLilyDistributed.flux_out(I,a.u)
+    MPI.Allreduce(min(Δt_max,inv(maximum(a.σ)+5a.ν)),Base.min,mpi_grid().comm)
+end
 @fastmath @inline function flux_out(I::CartesianIndex{d},u) where {d}
     s = zero(eltype(u))
     for i in 1:d

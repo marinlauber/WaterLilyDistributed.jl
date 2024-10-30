@@ -5,8 +5,41 @@ module WaterLilyDistributed
 
 using DocStringExtensions
 
+"""
+    MPIArray{T,N,V<:AbstractArray{T,N},W<:AbstractVector{T}}
+
+A distributed array that contains the array `A` and send and receive buffers `send` and `recv`.
+"""
+struct MPIArray{T,N,V<:AbstractArray{T,N},W<:AbstractVector{T}} <: AbstractArray{T,N}
+    A :: V
+    send :: Vector{W}
+    recv :: Vector{W}
+    function MPIArray(::Type{T}, dims::NTuple{N, Integer}) where {T,N}
+        A = Array{T,N}(undef, dims); M,n = last(dims)==N-1 ? (N-1,dims[1:end-1]) : (1,dims)
+        send = Array{T}(undef,M*2max(prod(n).÷n...))
+        recv = Array{T}(undef,M*2max(prod(n).÷n...))
+        new{T,N,typeof(A),typeof(send)}(A,[send,copy(send)],[recv,copy(recv)])
+    end
+    MPIArray(A::AbstractArray{T}) where T = (B=MPIArray(T,size(A)); B.A.=A; B)
+end
+export MPIArray
+for fname in (:size, :length, :ndims, :eltype) # how to write 4 lines of code in 5...
+    @eval begin
+        Base.$fname(A::MPIArray) = Base.$fname(A.A)
+    end
+end
+Base.getindex(A::MPIArray, i...)       = Base.getindex(A.A, i...)
+Base.setindex!(A::MPIArray, v, i...)   = Base.setindex!(A.A, v, i...)
+Base.copy(A::MPIArray)                 = MPIArray(A)
+Base.similar(A::MPIArray)              = MPIArray(eltype(A),size(A))
+Base.similar(A::MPIArray, dims::Tuple) = MPIArray(eltype(A),dims)
+# required for the @loop function
+using KernelAbstractions
+KernelAbstractions.get_backend(A::MPIArray) = KernelAbstractions.get_backend(A.A)
+export MPIArray
+
 include("util.jl")
-export L₂,BC!,@inside,inside,δ,apply!,loc,MPIArray
+export L₂,BC!,@inside,inside,δ,apply!,loc,get_extents,halos,buff
 
 using Reexport
 @reexport using KernelAbstractions: @kernel,@index,get_backend
@@ -102,6 +135,15 @@ function sim_step!(sim::Simulation,t_end;remeasure=true,max_steps=typemax(Int),v
             ", Δt=",round(sim.flow.Δt[end],digits=3))
     end
 end
+function sim_step!(sim::Simulation{D,T,S},t_end;remeasure=true,
+                   max_steps=typemax(Int),verbose=false) where {D,T,S<:MPIArray{T}}
+    steps₀ = length(sim.flow.Δt)
+    while sim_time(sim) < t_end && length(sim.flow.Δt) - steps₀ < max_steps
+        sim_step!(sim; remeasure)
+        (verbose && me()==0) && println("tU/L=",round(sim_time(sim),digits=4),
+                                        ", Δt=",round(sim.flow.Δt[end],digits=3))
+    end
+end
 function sim_step!(sim::Simulation;remeasure=true)
     remeasure && measure!(sim)
     mom_step!(sim.flow,sim.pois)
@@ -119,6 +161,10 @@ end
 
 export Simulation,sim_step!,sim_time,measure!
 
+# must be place here to have access to Simulation
+include("WaterLilyMPI.jl")
+export MPIArray,init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,get_extents
+
 # default WriteVTK functions
 function vtkWriter end
 function write! end
@@ -132,16 +178,6 @@ function restart_sim! end
 # export
 export restart_sim!
 
-# # @TODO add default MPI function
-function init_mpi end
-function me end
-function global_loc end
-function mpi_grid end
-function mpi_dims end
-function finalize_mpi end
-function get_extents end
-# export
-export init_mpi,me,global_loc,mpi_grid,mpi_dims,finalize_mpi,get_extents
 # Check number of threads when loading WaterLily
 """
     check_nthreads(::Val{1})
@@ -164,7 +200,6 @@ function __init__()
         @require CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba" include("../ext/WaterLilyCUDAExt.jl")
         @require WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192" include("../ext/WaterLilyWriteVTKExt.jl")
         @require ReadVTK = "dc215faf-f008-4882-a9f7-a79a826fadc3" include("../ext/WaterLilyReadVTKExt.jl")
-        @require MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195" include("../ext/WaterLilyMPIExt.jl")
     end
     check_nthreads(Val{Threads.nthreads()}())
 end

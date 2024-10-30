@@ -95,6 +95,13 @@ function residual!(p::Poisson)
     abs(s) <= 2eps(eltype(s)) && return
     @inside p.r[I] = p.r[I]-s
 end
+function residual!(p::Poisson{T,S}) where {T,S<:MPIArray{T}}
+    perBC!(p.x,p.perdir)
+    @inside p.r[I] = ifelse(p.iD[I]==0,0,p.z[I]-mult(I,p.L,p.D,p.x))
+    s = MPI.Allreduce(sum(p.r)/length(inside(p.r)),+,mpi_grid().comm)
+    abs(s) <= 2eps(eltype(s)) && return
+    @inside p.r[I] = p.r[I]-s
+end
 
 function increment!(p::Poisson) 
     perBC!(p.ϵ,p.perdir)
@@ -116,8 +123,11 @@ end
 
 # needed for MPI later
 using LinearAlgebra: dot
-_dot(a,b) = dot(a,b)
 ⋅(a,b) = _dot(a,b)
+_dot(a,b) = dot(a,b)
+function _dot(a::MPIArray{T},b::MPIArray{T}) where T
+    MPI.Allreduce(sum(T,@inbounds(a[I]*b[I]) for I ∈ inside(a)),+,mpi_grid().comm)
+end
 """
     pcg!(p::Poisson; it=6)
 
@@ -149,6 +159,11 @@ smooth!(p) = pcg!(p)
 
 L₂(p::Poisson) = p.r ⋅ p.r # special method since outside(p.r)≡0
 L∞(p::Poisson) = maximum(abs,p.r)
+# @TODO L₂ should be specialized to MPIArray by the dot product
+# function L₂(p::Poisson{T,S}) where {T,S<:MPIArray{T}} # should work on the GPU
+    # MPI.Allreduce(sum(T,@inbounds(p.r[I]*p.r[I]) for I ∈ inside(p.r)),+,mpi_grid().comm)
+# end
+L∞(p::Poisson{T,S}) where {T,S<:MPIArray{T}} = MPI.Allreduce(maximum(abs.(p.r)),Base.max,mpi_grid().comm)
 
 """
     solver!(A::Poisson;log,tol,itmx)

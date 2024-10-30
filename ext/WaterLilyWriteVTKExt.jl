@@ -7,7 +7,7 @@ else
 end
 
 using WaterLilyDistributed
-import WaterLilyDistributed: vtkWriter, write!, default_attrib, pvd_collection
+import WaterLilyDistributed: vtkWriter, write!, default_attrib, pvd_collection, get_extents
 using Printf: @sprintf
 import Base: close
 
@@ -30,14 +30,13 @@ struct VTKWriter
     collection    :: WriteVTK.CollectionFile
     output_attrib :: Dict{String,Function}
     count         :: Vector{Int}
-    extents       #:: Tuple{UnitRange}# cannot figure out what type to put here
 end
-function vtkWriter(fname="WaterLily";attrib=default_attrib(),dir="vtk_data",T=Float32,extents=[(1:1,1:1)])
+function vtkWriter(fname="WaterLily";attrib=default_attrib(),dir="vtk_data",T=Float32)
     (WaterLilyDistributed.master() && !isdir(dir)) && mkdir(dir)
-    VTKWriter(fname,dir,pvd_collection(fname),attrib,[0],extents)
+    VTKWriter(fname,dir,pvd_collection(fname),attrib,[0])
 end
-function vtkWriter(fname,dir::String,collection,attrib::Dict{String,Function},k,extents)
-    VTKWriter(fname,dir,collection,attrib,[k],extents)
+function vtkWriter(fname,dir::String,collection,attrib::Dict{String,Function},k)
+    VTKWriter(fname,dir,collection,attrib,[k])
 end
 """
     default_attrib()
@@ -68,8 +67,9 @@ end
 # parralel version of that file
 function write!(w::VTKWriter,a::Simulation{D,T,S};N=size(inside(a.flow.p))) where {D,T,S<:MPIArray{T}}
     k,part = w.count[1], Int(me()+1)
-    pvtk = pvtk_grid(w.dir_name*@sprintf("/%s_%06i", w.fname, k), w.extents[part];
-                     part=part, extents=w.extents, ghost_level=2)
+    extents = get_extents(a.flow.p)
+    pvtk = pvtk_grid(w.dir_name*@sprintf("/%s_%06i", w.fname, k), extents[part];
+                     part=part, extents=extents, ghost_level=2)
     for (name,func) in w.output_attrib
         # this seems bad, but I @benchmark it and it's the same as just calling func()
         pvtk[name] = size(func(a))==size(a.flow.p) ? func(a) : components_first(func(a))
