@@ -303,29 +303,29 @@ function get_extents(a::MPIArray)
     MPI.Allgather(xs, mpi_grid().comm)
 end
 
-# """
-#     interp(x::SVector, arr::AbstractArray)
+"""
+    interp(x::SVector, arr::AbstractArray)
 
-#     Linear interpolation from array `arr` at index-coordinate `x`.
-#     Note: This routine works for any number of dimensions.
-# """
-# function interp(x::SVector{D}, arr::AbstractArray{T,D}) where {D,T}
-#     # Index below the interpolation coordinate and the difference
-#     i = floor.(Int,x); y = x.-i
+    Linear interpolation from array `arr` at index-coordinate `x`.
+    Note: This routine works for any number of dimensions.
+"""
+function interp(x::SVector{D}, arr::AbstractArray{T,D}) where {D,T}
+    # Index below the interpolation coordinate and the difference
+    i = floor.(Int,x); y = x.-i
 
-#     # CartesianIndices around x
-#     I = CartesianIndex(i...); R = I:I+oneunit(I)
+    # CartesianIndices around x
+    I = CartesianIndex(i...); R = I:I+oneunit(I)
 
-#     # Linearly weighted sum over arr[R] (in serial)
-#     s = zero(T)
-#     @fastmath @inbounds @simd for J in R
-#         weight = prod(@. ifelse(J.I==I.I,1-y,y))
-#         s += arr[J]*weight
-#     end
-#     return s
-# end
-# function interp(x::SVector{D}, varr::AbstractArray) where {D}
-#     # Shift to align with each staggered grid component and interpolate
-#     @inline shift(i) = SVector{D}(ifelse(i==j,0.5,0.0) for j in 1:D)
-#     return SVector{D}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
-# end
+    # Linearly weighted sum over arr[R] (in serial)
+    s = zero(T)
+    @fastmath @inbounds @simd for J in R
+        weight = prod(@. ifelse(J.I==I.I,1-y,y))
+        s += arr[J]*weight
+    end
+    return s
+end
+function interp(x::SVector{D}, varr::AbstractArray) where {D}
+    # Shift to align with each staggered grid component and interpolate
+    @inline shift(i) = SVector{D}(ifelse(i==j,0.5,0.0) for j in 1:D)
+    return SVector{D}(interp(x+shift(i),@view(varr[..,i])) for i in 1:D)
+end

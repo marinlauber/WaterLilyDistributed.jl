@@ -1,10 +1,10 @@
 #mpiexecjl --project=examples/ -n 4 julia mpi_psolver.jl
-using MPI,WaterLily
+using WaterLilyDistributed,MPI
 using StaticArrays
 using FileIO,JLD2
 
-WaterLily.L₂(ml::MultiLevelPoisson) = WaterLily.L₂(ml.levels[1])
-WaterLily.L∞(ml::MultiLevelPoisson) = WaterLily.L∞(ml.levels[1])
+WaterLilyDistributed.L₂(ml::MultiLevelPoisson) = WaterLilyDistributed.L₂(ml.levels[1])
+WaterLilyDistributed.L∞(ml::MultiLevelPoisson) = WaterLilyDistributed.L∞(ml.levels[1])
 
 # domain and fields
 L = 16

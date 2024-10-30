@@ -1,10 +1,10 @@
 # test/MPI_test.jl
-using WaterLily,MPI
+using WaterLilyDistributed,MPI
 using StaticArrays
 using FileIO,JLD2
 
-WaterLily.L₂(ml::MultiLevelPoisson) = WaterLily.L₂(ml.levels[1])
-WaterLily.L∞(ml::MultiLevelPoisson) = WaterLily.L∞(ml.levels[1])
+WaterLilyDistributed.L₂(ml::MultiLevelPoisson) = WaterLilyDistributed.L₂(ml.levels[1])
+WaterLilyDistributed.L∞(ml::MultiLevelPoisson) = WaterLilyDistributed.L∞(ml.levels[1])
 
 """Flow around a circle"""
 function circle(dims,center,radius;Re=250,U=1,psolver=MultiLevelPoisson,mem=MPIArray)
@@ -27,7 +27,7 @@ sim.flow.σ .= NaN
 sim.flow.σ[inside(sim.flow.σ)] .= me() #reshape(collect(1:length(inside(sim.flow.σ))),size(inside(sim.flow.σ)))
 save("sigma_1_$(me()).jld2", "data", sim.flow.σ)
 # updating halos
-WaterLily.perBC!(sim.flow.σ,())
+WaterLilyDistributed.perBC!(sim.flow.σ,())
 save("sigma_2_$(me()).jld2", "data", sim.flow.σ)
 
 # test global sdf
@@ -36,7 +36,7 @@ sim.flow.σ .= NaN
 measure_sdf!(sim.flow.σ,sim.body,0.0)
 save("sdf_3_$(me()).jld2", "data", sim.flow.σ)
 # updating the halos here
-WaterLily.perBC!(sim.flow.σ,())
+WaterLilyDistributed.perBC!(sim.flow.σ,())
 save("sdf_4_$(me()).jld2", "data", sim.flow.σ)
 
 # test on vector field
@@ -55,6 +55,6 @@ save("mom_step_$(me())_u2.jld2","data",sim.flow.u[:,:,2])
 # test norm functions
 sim.pois.levels[1].r .= 0.0
 me() == 1 && (sim.pois.levels[1].r[32,32] = 123.456789) # make this the only non-zero element
-Linf = WaterLily.L∞(sim.pois)
-L2 = WaterLily.L₂(sim.pois)
+Linf = WaterLilyDistributed.L∞(sim.pois)
+L2 = WaterLilyDistributed.L₂(sim.pois)
 save("norm_$(me()).jld2", "data", [Linf,L2])

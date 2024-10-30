@@ -6,16 +6,16 @@ using FileIO,JLD2
 @testset "util.jl" begin
     I = CartesianIndex(1,2,3,4)
     @test I+δ(3,I) == CartesianIndex(1,2,4,4)
-    @test WaterLily.CI(I,5)==CartesianIndex(1,2,3,4,5)
-    @test WaterLily.CIj(3,I,5)==CartesianIndex(1,2,5,4)
-    @test WaterLily.CIj(2,CartesianIndex(16,16,16,3),14)==CartesianIndex(16,14,16,3)
+    @test WaterLilyDistributed.CI(I,5)==CartesianIndex(1,2,3,4,5)
+    @test WaterLilyDistributed.CIj(3,I,5)==CartesianIndex(1,2,5,4)
+    @test WaterLilyDistributed.CIj(2,CartesianIndex(16,16,16,3),14)==CartesianIndex(16,14,16,3)
 
     @test loc(3,CartesianIndex(3,4,5)) == SVector(3,4,4.5) .- 2.5
     I = CartesianIndex(rand(2:10,3)...)
     @test loc(0,I) == SVector(I.I...) .- 2.5
 
     ex,sym = :(a[I,i] = Math.add(p.b[I],func(I,q))),[]
-    WaterLily.grab!(sym,ex)
+    WaterLilyDistributed.grab!(sym,ex)
     @test ex == :(a[I, i] = Math.add(b[I], func(I, q)))
     @test sym == [:a, :I, :i, :(p.b), :q]
 
@@ -43,12 +43,12 @@ using FileIO,JLD2
         BC!(u,U,true) # save exit values
         @test GPUArrays.@allowscalar all(u[end-1, :, 1] .== 3)
 
-        WaterLily.exitBC!(u,u,U,0) # conservative exit check
+        WaterLilyDistributed.exitBC!(u,u,U,0) # conservative exit check
         @test GPUArrays.@allowscalar all(u[end-1,3:end-2, 1] .== U[1])
 
         BC!(u,U,true,(2,)) # periodic in y and save exit values
         @test GPUArrays.@allowscalar all(u[:, 1:2, 1] .== u[:, end-1:end, 1]) && all(u[:, 1:2, 1] .== u[:,end-1:end,1])
-        WaterLily.perBC!(σ,(1,2)) # periodic in two directions
+        WaterLilyDistributed.perBC!(σ,(1,2)) # periodic in two directions
         @test GPUArrays.@allowscalar all(σ[1, 2:end-1] .== σ[end-1, 2:end-1]) && all(σ[2:end-1, 1] .== σ[2:end-1, end-1])
 
         u = rand(Ng..., D) |> f # vector
@@ -59,10 +59,10 @@ using FileIO,JLD2
         # test interpolation
         a = zeros(5,5,2) |> f; b = zeros(5,5) |> f
         apply!((i,x)->x[i]+1.5,a); apply!(x->x[1]+1.5,b) # offset for start of grid
-        @test GPUArrays.@allowscalar all(WaterLily.interp(SVector(2.5,1),a) .≈ [1.5,0.])
-        @test GPUArrays.@allowscalar all(WaterLily.interp(SVector(3.5,3),a) .≈ [2.5,2.])
-        @test GPUArrays.@allowscalar WaterLily.interp(SVector(2.5,1),b) ≈ 1.5
-        @test GPUArrays.@allowscalar WaterLily.interp(SVector(3.5,3),b) ≈ 2.5
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.interp(SVector(2.5,1),a) .≈ [1.5,0.])
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.interp(SVector(3.5,3),a) .≈ [2.5,2.])
+        @test GPUArrays.@allowscalar WaterLilyDistributed.interp(SVector(2.5,1),b) ≈ 1.5
+        @test GPUArrays.@allowscalar WaterLilyDistributed.interp(SVector(3.5,3),b) ≈ 2.5
     end
 end
 
@@ -96,7 +96,7 @@ end
 
 @testset "MultiLevelPoisson.jl" begin
     I = CartesianIndex(4,3,2)
-    @test all(WaterLily.down(J)==I for J ∈ WaterLily.up(I))
+    @test all(WaterLilyDistributed.down(J)==I for J ∈ WaterLilyDistributed.up(I))
     @test_throws AssertionError("MultiLevelPoisson requires size=a2ⁿ, where n>2") Poisson_setup(MultiLevelPoisson,(15+2,3^4+2))
 
     err,pois = Poisson_setup(MultiLevelPoisson,(12,12))
@@ -105,7 +105,7 @@ end
     @test err < 1e-5
 
     pois.levels[1].L[5:6,:,1].=0
-    WaterLily.update!(pois)
+    WaterLilyDistributed.update!(pois)
     @test pois.levels[3].D == Float32[0 0 0 0 0 0;0 0 0 0 0 0;0 0 -2 -2 0 0;
                                       0 0 -2 -2 0 0;0 0 0 0 0 0;0 0 0 0 0 0]
 
@@ -121,23 +121,23 @@ end
 
 @testset "Flow.jl" begin
     # test than vanLeer behaves correctly
-    vanLeer = WaterLily.vanLeer
+    vanLeer = WaterLilyDistributed.vanLeer
     @test vanLeer(1,0,1) == 0 && vanLeer(1,2,1) == 2 # larger or smaller than both u,d revetrs to itlsef
     @test vanLeer(1,2,3) == 2.5 && vanLeer(3,2,1) == 1.5 # if c is between u,d, limiter is quadratic
 
-    @test all(WaterLily.BCTuple((1,2,3),[0],3).==WaterLily.BCTuple((i,t)->i,0,3))
-    @test all(WaterLily.BCTuple((i,t)->t,[1.234],3).==ntuple(i->1.234,3))
+    @test all(WaterLilyDistributed.BCTuple((1,2,3),[0],3).==WaterLilyDistributed.BCTuple((i,t)->i,0,3))
+    @test all(WaterLilyDistributed.BCTuple((i,t)->t,[1.234],3).==ntuple(i->1.234,3))
 
     # check applying acceleration
     for f ∈ arrays
         N = 4; a = zeros(N,N,2) |> f
-        WaterLily.accelerate!(a,[1],nothing,())
+        WaterLilyDistributed.accelerate!(a,[1],nothing,())
         @test all(a .== 0)
-        WaterLily.accelerate!(a,[1],(i,t) -> i==1 ? t : 2*t,())
+        WaterLilyDistributed.accelerate!(a,[1],(i,t) -> i==1 ? t : 2*t,())
         @test all(a[:,:,1] .== 1) && all(a[:,:,2] .== 2)
-        WaterLily.accelerate!(a,[1],nothing,(i,t) -> i==1 ? -t : -2*t)
+        WaterLilyDistributed.accelerate!(a,[1],nothing,(i,t) -> i==1 ? -t : -2*t)
         @test all(a[:,:,1] .== 0) && all(a[:,:,2] .== 0)
-        WaterLily.accelerate!(a,[1],(i,t) -> i==1 ? t : 2*t,(i,t) -> i==1 ? -t : -2*t)
+        WaterLilyDistributed.accelerate!(a,[1],(i,t) -> i==1 ? t : 2*t,(i,t) -> i==1 ? -t : -2*t)
         @test all(a[:,:,1] .== 0) && all(a[:,:,2] .== 0)
     end
     # Impulsive flow in a box
@@ -152,9 +152,9 @@ end
 end
 
 @testset "Body.jl" begin
-    @test WaterLily.μ₀(3,6)==WaterLily.μ₀(0.5,1)
-    @test WaterLily.μ₀(0,1)==0.5
-    @test WaterLily.μ₁(0,2)==2*(1/4-1/π^2)
+    @test WaterLilyDistributed.μ₀(3,6)==WaterLilyDistributed.μ₀(0.5,1)
+    @test WaterLilyDistributed.μ₀(0,1)==0.5
+    @test WaterLilyDistributed.μ₁(0,2)==2*(1/4-1/π^2)
 end
 
 @testset "AutoBody.jl" begin
@@ -185,8 +185,8 @@ end
 
     # test curvature, 2D and 3D
     # A = ForwardDiff.Hessian(y->body1.sdf(y,0.0),[0.,0.])
-    @test all(WaterLily.curvature([1. 0.; 0. 1.]).≈(1.,0.))
-    @test all(WaterLily.curvature([2. 1. 0.; 1. 2. 1.; 0. 1. 2.]).≈(3.,10.))
+    @test all(WaterLilyDistributed.curvature([1. 0.; 0. 1.]).≈(1.,0.))
+    @test all(WaterLilyDistributed.curvature([2. 1. 0.; 1. 2. 1.; 0. 1. 2.]).≈(3.,10.))
 
     # check that sdf functions are the same
     for f ∈ arrays
@@ -216,17 +216,17 @@ end
     for f ∈ arrays
         sim,TGV = TGVsim(f,T=Float32); ue=copy(sim.flow.u) |> f
         sim_step!(sim,π/100)
-        apply!((i,x)->TGV(i,x,WaterLily.time(sim),2π/sim.L,sim.flow.ν),ue)
+        apply!((i,x)->TGV(i,x,WaterLilyDistributed.time(sim),2π/sim.L,sim.flow.ν),ue)
         u = sim.flow.u |> f
-        @test WaterLily.L₂(u[:,:,1].-ue[:,:,1]) < 1e-4 &&
-              WaterLily.L₂(u[:,:,2].-ue[:,:,2]) < 1e-4
+        @test WaterLilyDistributed.L₂(u[:,:,1].-ue[:,:,1]) < 1e-4 &&
+              WaterLilyDistributed.L₂(u[:,:,2].-ue[:,:,2]) < 1e-4
     end
 end
 @testset "ForwardDiff" begin
     function TGV_ke(Re)
         sim,_ = TGVsim(Array;Re)
         sim_step!(sim,π/100)
-        sum(I->WaterLily.ke(I,sim.flow.u),inside(sim.flow.p))
+        sum(I->WaterLilyDistributed.ke(I,sim.flow.u),inside(sim.flow.p))
     end
     using ForwardDiff:derivative
     # @test derivative(TGV_ke,1e3) ≈ (TGV_ke(1e3+1)-TGV_ke(1e3-1))/2 rtol=1e-6
@@ -242,7 +242,7 @@ end
     function lift(ξ,t_end=1)
         sim = spinning(ξ)
         sim_step!(sim,t_end;remeasure=false)
-        WaterLily.total_force(sim)[2]/(ξ^2*sim.U^2*sim.L)
+        WaterLilyDistributed.total_force(sim)[2]/(ξ^2*sim.U^2*sim.L)
     end
     h = 1e-6
     @test derivative(lift,2.0) ≈ (lift(2+h)-lift(2-h))/2h rtol=√h
@@ -254,7 +254,7 @@ function acceleratingFlow(N;T=Float64,perdir=(1,),jerk=4,mem=Array)
     UScale = √N  # this is also initial U
     # constant jerk in x, zero acceleration in y
     g(i,t) = i==1 ? t*jerk : 0
-    return WaterLily.Simulation(
+    return WaterLilyDistributed.Simulation(
         (N,N), (UScale,0.), N; ν=0.001,g,Δt=0.001,perdir,T,mem
     ),jerk
 end
@@ -264,68 +264,68 @@ end
         sim,jerk = acceleratingFlow(N;mem=f)
         sim_step!(sim,1.0); u = sim.flow.u |> Array
         # Exact uₓ = uₓ₀ + ∫ a dt = uₓ₀ + ∫ jerk*t dt = uₓ₀ + 0.5*jerk*t^2
-        uFinal = sim.flow.U[1] + 0.5*jerk*WaterLily.time(sim)^2
+        uFinal = sim.flow.U[1] + 0.5*jerk*WaterLilyDistributed.time(sim)^2
         @test (
-            WaterLily.L₂(u[:,:,1].-uFinal) < 1e-4 &&
-            WaterLily.L₂(u[:,:,2].-0) < 1e-4
+            WaterLilyDistributed.L₂(u[:,:,1].-uFinal) < 1e-4 &&
+            WaterLilyDistributed.L₂(u[:,:,2].-0) < 1e-4
         )
     end
 end
-import WaterLily: ×
+import WaterLilyDistributed: ×
 @testset "Metrics.jl" begin
     J = CartesianIndex(3,4,3); x = loc(0,J,Float64); px = prod(x)
     for f ∈ arrays
         u = zeros(5,6,7,3) |> f; apply!((i,x)->x[i]+prod(x),u)
         p = zeros(5,6,7) |> f
-        @inside p[I] = WaterLily.ke(I,u)
+        @inside p[I] = WaterLilyDistributed.ke(I,u)
         @test GPUArrays.@allowscalar p[J]==0.5*sum(abs2,x .+ px)
-        @inside p[I] = WaterLily.ke(I,u,x)
+        @inside p[I] = WaterLilyDistributed.ke(I,u,x)
         @test GPUArrays.@allowscalar p[J]==1.5*px^2
-        @inside p[I] = WaterLily.λ₂(I,u)
+        @inside p[I] = WaterLilyDistributed.λ₂(I,u)
         @test GPUArrays.@allowscalar p[J]≈1
         ω = (1 ./ x)×repeat([px],3)
-        @inside p[I] = WaterLily.curl(2,I,u)
+        @inside p[I] = WaterLilyDistributed.curl(2,I,u)
         @test GPUArrays.@allowscalar p[J]==ω[2]
-        f==Array && @test WaterLily.ω(J,u)≈ω
-        @inside p[I] = WaterLily.ω_mag(I,u)
+        f==Array && @test WaterLilyDistributed.ω(J,u)≈ω
+        @inside p[I] = WaterLilyDistributed.ω_mag(I,u)
         @test GPUArrays.@allowscalar p[J]==sqrt(sum(abs2,ω))
-        @inside p[I] = WaterLily.ω_θ(I,(0,0,1),x .+ (0,1,2),u)
+        @inside p[I] = WaterLilyDistributed.ω_θ(I,(0,0,1),x .+ (0,1,2),u)
         @test GPUArrays.@allowscalar p[J]≈ω[1]
         apply!((x)->1,p)
-        @test WaterLily.L₂(p)≈prod(size(p).-4)
+        @test WaterLilyDistributed.L₂(p)≈prod(size(p).-4)
         # test force routines
         N = 32
         p = zeros(N,N) |> f; df₂ = zeros(N,N,2) |> f; df₃ = zeros(N,N,N,3) |> f
         @inside p[I] = loc(0, I, eltype(p))[2]
         body = AutoBody((x,t)->√sum(abs2,x.-(N/2))-N÷4,(x,t)->x)
-        force = WaterLily.pressure_force(p,df₂,body)
+        force = WaterLilyDistributed.pressure_force(p,df₂,body)
         @test sum(abs,force/(π*(N/4)^2) - [0,1]) < 2e-3
         # stress tensor
         u₂ = zeros(N,N,2) |> f
         u₃ = zeros(N,N,N,3) |> f
-        @test GPUArrays.@allowscalar all(WaterLily.∇²u(CartesianIndex(N÷2,N÷2),u₂) .≈ 0)
-        @test GPUArrays.@allowscalar all(WaterLily.∇²u(CartesianIndex(N÷2,N÷2,N÷2),u₃) .≈ 0)
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.∇²u(CartesianIndex(N÷2,N÷2),u₂) .≈ 0)
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.∇²u(CartesianIndex(N÷2,N÷2,N÷2),u₃) .≈ 0)
         apply!((i,x)->x[i],u₂) # uniform gradient
         apply!((i,x)->x[i],u₃)
-        @test GPUArrays.@allowscalar all(WaterLily.∇²u(CartesianIndex(N÷2,N÷2),u₂) .≈ SA[2 0; 0 2])
-        @test GPUArrays.@allowscalar all(WaterLily.∇²u(CartesianIndex(N÷2,N÷2,N÷2),u₃) .≈ SA[2 0 0; 0 2 0; 0 0 2])
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.∇²u(CartesianIndex(N÷2,N÷2),u₂) .≈ SA[2 0; 0 2])
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.∇²u(CartesianIndex(N÷2,N÷2,N÷2),u₃) .≈ SA[2 0 0; 0 2 0; 0 0 2])
         apply!((i,x)->x[i%2+1],u₂) # shear
         apply!((i,x)->x[i%3+1],u₃)
-        @test GPUArrays.@allowscalar all(WaterLily.∇²u(CartesianIndex(N÷2,N÷2),u₂) .≈ SA[0 2; 2 0])
-        @test GPUArrays.@allowscalar all(WaterLily.∇²u(CartesianIndex(N÷2,N÷2,N÷2),u₃) .≈ SA[0 1 1; 1 0 1; 1 1 0])
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.∇²u(CartesianIndex(N÷2,N÷2),u₂) .≈ SA[0 2; 2 0])
+        @test GPUArrays.@allowscalar all(WaterLilyDistributed.∇²u(CartesianIndex(N÷2,N÷2,N÷2),u₃) .≈ SA[0 1 1; 1 0 1; 1 1 0])
         # viscous force
         u₂ .= 0; u₃ .= 0
-        @test all(WaterLily.viscous_force(u₂,1.0,df₂,body) .≈ 0)
-        @test all(WaterLily.viscous_force(u₃,1.0,df₃,body) .≈ 0)
+        @test all(WaterLilyDistributed.viscous_force(u₂,1.0,df₂,body) .≈ 0)
+        @test all(WaterLilyDistributed.viscous_force(u₃,1.0,df₃,body) .≈ 0)
         # pressure moment
         p₂ = zeros(N,N) |> f; apply!(x->x[2],p₂)
         p₃ = zeros(N,N,N) |> f; apply!(x->x[2],p₃)
-        @test WaterLily.pressure_moment(SVector{2,Float64}(N/2,N/2),p₂,df₂,body,0)[1] ≈ 0 # no moment in hydrostatic pressure
-        @test all(WaterLily.pressure_moment(SVector{3,Float64}(N/2,N/2,N/2),p₃,df₃,body,0) .≈ SA[0 0 0]) # with a 3D field, 3D moments
+        @test WaterLilyDistributed.pressure_moment(SVector{2,Float64}(N/2,N/2),p₂,df₂,body,0)[1] ≈ 0 # no moment in hydrostatic pressure
+        @test all(WaterLilyDistributed.pressure_moment(SVector{3,Float64}(N/2,N/2,N/2),p₃,df₃,body,0) .≈ SA[0 0 0]) # with a 3D field, 3D moments
     end
 end
 
-@testset "WaterLily.jl" begin
+@testset "WaterLilyDistributed.jl" begin
     radius = 8; ν=radius/250; T=Float32; nm = radius.*(4,4)
     circle(x,t) = √sum(abs2,x .- 2radius) - radius
     move(x,t) = x-SA[t,0]
@@ -399,10 +399,10 @@ end
 end
 using MPI
 @testset "MPIArray.jl" begin
-    buff = Base.get_extension(WaterLily, :WaterLilyMPIExt).buff
-    halos = Base.get_extension(WaterLily, :WaterLilyMPIExt).halos
-    copyto! = Base.get_extension(WaterLily, :WaterLilyMPIExt).copyto!
-    fill_send! = Base.get_extension(WaterLily, :WaterLilyMPIExt).fill_send!
+    buff = WaterLilyDistributed.buff
+    halos = WaterLilyDistributed.halos
+    copyto! = WaterLilyDistributed.copyto!
+    fill_send! = WaterLilyDistributed.fill_send!
     for N ∈ [(16,8)] # not yet 3D
         for T in [Float32]
             a = zeros(T,N) |> MPIArray; a .= 1.0

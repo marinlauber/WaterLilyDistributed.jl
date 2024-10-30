@@ -1,4 +1,4 @@
-using WaterLily
+using WaterLilyDistributed
 using Test
 using StaticArrays
 
