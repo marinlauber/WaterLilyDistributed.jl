@@ -1,4 +1,4 @@
-#mpiexecjl --project=. -n 2 julia TwoD_CircleMPI.jl
+#mpiexecjl --project=. -n 4 julia TwoD_CircleMPI.jl
 
 using WaterLilyDistributed
 using WriteVTK
@@ -41,11 +41,12 @@ end
 L = 2^6
 
 # init the MPI grid and the simulation
-r = init_mpi((L,2L))
-sim = circle((L,2L),SA[L/2,L+2],L/8;mem=MPIArray) #use MPIArray to use extension
+r = init_mpi((2L,4L);dims=[4, 1, 0])
+sim = circle((2L,4L),SA[L,2L+2],L/2;mem=MPIArray) #use MPIArray to use extension
 
 wr = vtkWriter("WaterLily-MPI-circle";attrib=custom_attrib,dir="vtk_data")
-for _ in 1:50
+write!(wr,sim)
+for _ in 1:10
     sim_step!(sim,sim_time(sim)+1.0,verbose=true)
     write!(wr,sim)
 end
